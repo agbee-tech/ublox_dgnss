@@ -44,22 +44,23 @@ public:
 
     enu_pos_cov_.fill(0.0);  // initialise values to zero
 
-    auto qos = rclcpp::SensorDataQoS();
+    auto sub_qos = rclcpp::SensorDataQoS();
+    auto pub_qos = rclcpp::QoS(10).reliable();
     rclcpp::PublisherOptions pub_options;
     pub_options.qos_overriding_options = rclcpp::QosOverridingOptions::with_default_policies();
 
     // Create publishers
-    nav_sat_fix_pub_ = this->create_publisher<sensor_msgs::msg::NavSatFix>("fix", qos, pub_options);
+    nav_sat_fix_pub_ = this->create_publisher<sensor_msgs::msg::NavSatFix>("fix", pub_qos, pub_options);
 
     // Create subscribers
     ubx_nav_hp_pos_llh_sub_ = this->create_subscription<ublox_ubx_msgs::msg::UBXNavHPPosLLH>(
-      "ubx_nav_hp_pos_llh", qos,
+      "ubx_nav_hp_pos_llh", sub_qos,
       std::bind(&UbloxNavSatHpFixNode::nav_hp_pos_llh_callback, this, std::placeholders::_1));
     ubx_nav_cov_sub_ = this->create_subscription<ublox_ubx_msgs::msg::UBXNavCov>(
-      "ubx_nav_cov", qos,
+      "ubx_nav_cov", sub_qos,
       std::bind(&UbloxNavSatHpFixNode::nav_cov_callback, this, std::placeholders::_1));
     ubx_nav_status_sub_ = this->create_subscription<ublox_ubx_msgs::msg::UBXNavStatus>(
-      "ubx_nav_status", qos,
+      "ubx_nav_status", sub_qos,
       std::bind(&UbloxNavSatHpFixNode::nav_sta_callback, this, std::placeholders::_1));
   }
 
