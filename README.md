@@ -1,5 +1,35 @@
 # ublox-dgnss
 
+## Custom Modifications in this Fork (agbee)
+### このフォークにおける変更点
+
+This fork includes the following modifications to improve stability in production environments:
+このフォークでは、実運用における安定性向上のため、以下の変更を行っています。
+
+---
+
+#### 1. Changed Covariance Calculation for NavSatFix
+**NavSatFixにおける共分散計算方法の変更**
+
+* **Reason / 理由:**
+    * (EN) We observed that the `/ubx_nav_cov` message output from U-blox ZED-F9P modules can be unstable or dropped under certain conditions.
+    * (JP) U-blox ZED-F9Pモジュールにおいて、`/ubx_nav_cov` メッセージの出力が不安定になる（または欠落する）事象が確認されたため。
+* **Change / 変更内容:**
+    * (EN) Removed the dependency on the `/ubx_nav_cov` message. Instead, the covariance is now calculated using the horizontal and vertical accuracy fields (`h_acc`, `v_acc`) from the `/ubx_nav_hp_pos_llh` message.
+    * (JP) `/ubx_nav_cov` への依存を排除しました。代わりに `/ubx_nav_hp_pos_llh` メッセージに含まれる精度情報（`h_acc`, `v_acc`）を用いて、共分散（対角成分）を算出してパブリッシュするように変更しました。
+
+#### 2. Optimized QoS Settings for NavSatFix Publisher
+**NavSatFixパブリッシャーのQoS設定の最適化**
+
+* **Reason / 理由:**
+    * (EN) The original `best_effort` setting caused message loss under specific network loads, failing to meet system reliability requirements.
+    * (JP) オリジナルの `best_effort` 設定では、特定のネットワーク負荷状況下で `/fix` メッセージの取りこぼしが発生し、システムの要求要件を満たせない場面があったため。
+* **Change / 変更内容:**
+    * (EN) Changed the publisher's QoS profile to `Reliable` (with a queue depth of 10) to ensure more robust message delivery.
+    * (JP) パブリッシャーのQoS設定を `Reliable`（Queue Depth: 10）に変更し、より確実なメッセージ伝達を保証するように改善しました。
+
+---
+
 This usb based driver is focused on UBLOX  UBX messaging, for a DGNSS rover and base station. High precision data is available.
 
 A moving base station configuration has been added. This package also supports a fixed base station and moving rover use case.
