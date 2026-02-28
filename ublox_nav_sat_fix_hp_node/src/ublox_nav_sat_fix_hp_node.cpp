@@ -20,7 +20,6 @@
 #include "sensor_msgs/msg/nav_sat_status.hpp"
 #include "ublox_nav_sat_fix_hp_node/visibility_control.h"
 #include "ublox_ubx_msgs/msg/gps_fix.hpp"
-#include "ublox_ubx_msgs/msg/ubx_nav_cov.hpp"
 #include "ublox_ubx_msgs/msg/ubx_nav_hp_pos_llh.hpp"
 #include "ublox_ubx_msgs/msg/ubx_nav_status.hpp"
 
@@ -42,8 +41,6 @@ public:
   {
     RCLCPP_INFO(this->get_logger(), "starting %s", get_name());
 
-    enu_pos_cov_.fill(0.0);  // initialise values to zero
-
     auto sub_qos = rclcpp::SensorDataQoS();
     auto pub_qos = rclcpp::QoS(10).reliable();
     rclcpp::PublisherOptions pub_options;
@@ -56,9 +53,7 @@ public:
     ubx_nav_hp_pos_llh_sub_ = this->create_subscription<ublox_ubx_msgs::msg::UBXNavHPPosLLH>(
       "ubx_nav_hp_pos_llh", sub_qos,
       std::bind(&UbloxNavSatHpFixNode::nav_hp_pos_llh_callback, this, std::placeholders::_1));
-    ubx_nav_cov_sub_ = this->create_subscription<ublox_ubx_msgs::msg::UBXNavCov>(
-      "ubx_nav_cov", sub_qos,
-      std::bind(&UbloxNavSatHpFixNode::nav_cov_callback, this, std::placeholders::_1));
+
     ubx_nav_status_sub_ = this->create_subscription<ublox_ubx_msgs::msg::UBXNavStatus>(
       "ubx_nav_status", sub_qos,
       std::bind(&UbloxNavSatHpFixNode::nav_sta_callback, this, std::placeholders::_1));
@@ -68,22 +63,12 @@ public:
   ~UbloxNavSatHpFixNode() {RCLCPP_INFO(this->get_logger(), "finished");}
 
 private:
-  // void nav_hp_pos_llh_callback(const ublox_ubx_msgs::msg::UBXNavHPPosLLH::SharedPtr llh_msg);
-  // void nav_cov_callback(const ublox_ubx_msgs::msg::UBXNavCov::SharedPtr nav_cov_msg);
-  // void nav_sta_callback(const ublox_ubx_msgs::msg::UBXNavStatus::SharedPtr nav_sta_msg);
-
   rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr nav_sat_fix_pub_;
 
   rclcpp::Subscription<ublox_ubx_msgs::msg::UBXNavHPPosLLH>::SharedPtr ubx_nav_hp_pos_llh_sub_;
-  rclcpp::Subscription<ublox_ubx_msgs::msg::UBXNavCov>::SharedPtr ubx_nav_cov_sub_;
   rclcpp::Subscription<ublox_ubx_msgs::msg::UBXNavStatus>::SharedPtr ubx_nav_status_sub_;
 
-  // std::vector<double> enu_covariance_diagonal_;
-  std::array<double, POS_COV_ARR_SIZE> enu_pos_cov_;
   sensor_msgs::msg::NavSatStatus nav_sat_stat_;
-
-  // flags used to check whether we have received corresponding messages
-  bool have_recd_enu_pos_cov_ = false;
 
   UBLOX_NAV_SAT_FIX_HP_NODE_LOCAL
   void nav_hp_pos_llh_callback(
@@ -106,22 +91,19 @@ private:
     nav_sat_fix_msg.longitude = lon;  // Degrees
     nav_sat_fix_msg.altitude = alt;   // meters
 
-    // Fill in covariance data
-    if (nav_sat_fix_msg.position_covariance.size() != enu_pos_cov_.size()) {
-      RCLCPP_ERROR(
-        this->get_logger(), "Size mismatch betwwen NavSatFix covariance data and EnuPosCov data");
-      return;
-    }
-    for (size_t i = 0; i < enu_pos_cov_.size(); i++) {
-      nav_sat_fix_msg.position_covariance[i] = enu_pos_cov_[i];
-    }
-    if (have_recd_enu_pos_cov_) {
-      // Set covariance type to estimated from the converted NED to ENU covariance
-      nav_sat_fix_msg.position_covariance_type = sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_KNOWN;
-    } else {
-      nav_sat_fix_msg.position_covariance_type =
-        sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_UNKNOWN;
-    }
+    // Calucuate cov from HPPOSLLH
+    double h_acc_m = ubx_hppos_llh_msg->h_acc * 1e-4;
+    double v_acc_m = ubx_hppos_llh_msg->v_acc * 1e-4;
+
+    double h_var = h_acc_m * h_acc_m;
+    double v_var = v_acc_m * v_acc_m;
+
+    nav_sat_fix_msg.position_covariance.fill(0.0);
+    nav_sat_fix_msg.position_covariance[0] = h_var; // East
+    nav_sat_fix_msg.position_covariance[4] = h_var; // North
+    nav_sat_fix_msg.position_covariance[8] = v_var; // Up
+
+    nav_sat_fix_msg.position_covariance_type = sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_DIAGONAL_KNOWN;
 
     // Publish NavSatFix message
     nav_sat_fix_pub_->publish(nav_sat_fix_msg);
@@ -131,48 +113,8 @@ private:
   }
 
   UBLOX_NAV_SAT_FIX_HP_NODE_LOCAL
-  void nav_cov_callback(const ublox_ubx_msgs::msg::UBXNavCov::SharedPtr ubx_cov_msg)
-  {
-    // 6 position covariance values available in UBX-NAV-COV matrix
-    // Matrix is symmetrix, so only upper triangular values are shown
-    // pos_cov_nn
-    // pos_cov_ne
-    // pos_cov_nd
-    // pos_cov_ee
-    // pos_cov_ed
-    // pos_cov_dd
-
-    // In matrix notation, the values in NED coordinate system are
-    // C_NED = | Pnn Pne Pnd |
-    //         | Pne Pee Ped |
-    //         | Pnd Ped Pdd |
-
-    // After transformation into ENU coordinate system, the matrix becomes
-    // C_ENU = | Pee  Pne -Ped |
-    //         | Pne  Pnn -Pnd |
-    //         |-Ped -Pnd  Pdd |
-
-    // Tranform the covariance matrix from NED to ENU format in row-major order
-    static_assert(POS_COV_ARR_SIZE == 9, "size of enu_pos_cov_ must be 9");
-    enu_pos_cov_[0] = ubx_cov_msg->pos_cov_ee;
-    enu_pos_cov_[1] = ubx_cov_msg->pos_cov_ne;
-    enu_pos_cov_[2] = -ubx_cov_msg->pos_cov_ed;
-    enu_pos_cov_[3] = ubx_cov_msg->pos_cov_ne;
-    enu_pos_cov_[4] = ubx_cov_msg->pos_cov_nn;
-    enu_pos_cov_[5] = -ubx_cov_msg->pos_cov_nd;
-    enu_pos_cov_[6] = -ubx_cov_msg->pos_cov_ed;
-    enu_pos_cov_[7] = -ubx_cov_msg->pos_cov_nd;
-    enu_pos_cov_[8] = ubx_cov_msg->pos_cov_dd;
-
-    // set flag to show we have received fresh data for this message
-    have_recd_enu_pos_cov_ = true;
-  }
-
-  UBLOX_NAV_SAT_FIX_HP_NODE_LOCAL
   void nav_sta_callback(const ublox_ubx_msgs::msg::UBXNavStatus::SharedPtr ubx_sta_msg)
   {
-    // UBX NAV STATUS values do not map very cleanly to ROS2 sensor_msgs/msg/NavSatStatus values.
-    // Do the best we can to indicate whether we have GPS fix or not
     switch (ubx_sta_msg->gps_fix.fix_type) {
       case ublox_ubx_msgs::msg::GpsFix::GPS_NO_FIX:
       case ublox_ubx_msgs::msg::GpsFix::GPS_TIME_ONLY:
@@ -192,9 +134,6 @@ private:
         nav_sat_stat_.status = sensor_msgs::msg::NavSatStatus::STATUS_NO_FIX;
         break;
     }
-
-    // Service values - derive from UBX-NAV-SAT gnssId field?
-    // In their absence, use arrogant default assumption of GPS
     nav_sat_stat_.service = sensor_msgs::msg::NavSatStatus::SERVICE_GPS;
   }
 };
