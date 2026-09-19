@@ -126,6 +126,15 @@ private:
   std::vector<uint16_t> product_ids_;
   uint16_t connected_product_id_;  // Actual connected device product ID
   std::string serial_str_;
+  // Physical USB topology path, e.g. "1-2" or "1-4.2" (bus-port[.port...],
+  // matching Linux sysfs/lsusb notation). Takes priority over serial_str_
+  // when non-empty -- needed because the ZED-F9P silently ignores writes to
+  // its legacy CFG-USB serialNumber field (ACKs the SET, ACKs the CFG-CFG
+  // save, but the value never actually changes), so a custom serial string
+  // cannot be used to tell two identical F9P units apart. USB port location
+  // is stable as long as the module stays plugged into the same physical
+  // port.
+  std::string usb_path_;
   ublox_dgnss::DeviceFamily device_family_;
   int class_id_;
   int ep_data_out_addr_ = 0;
@@ -158,7 +167,9 @@ private:
 private:
   libusb_device_handle * open_device_with_serial_string(
     libusb_context * ctx, int vendor_id,
-    const std::vector<uint16_t> & product_ids, std::string serial_str, char * serial_num_string);
+    const std::vector<uint16_t> & product_ids, std::string serial_str,
+    std::string usb_path, char * serial_num_string);
+  static std::string usb_device_path(libusb_device * device);
 // this is called after the out transfer to USB from HOST has been received by libusb
   void callback_out(struct libusb_transfer * transfer);
 // this is called when the stat for in is available - from USB in HOST
@@ -189,7 +200,8 @@ public:
   Connection(
     int vendor_id, const std::vector<uint16_t> & product_ids, std::string serial_str,
     ublox_dgnss::DeviceFamily device_family = ublox_dgnss::DeviceFamily::F9P,
-    int log_level = LIBUSB_OPTION_LOG_LEVEL);
+    int log_level = LIBUSB_OPTION_LOG_LEVEL,
+    std::string usb_path = "");
   ~Connection();
   void set_in_callback(connection_in_cb_fn in_cb_fn)
   {

@@ -155,6 +155,7 @@ public:
     check_for_device_family_param(parameters_client);
     check_for_ubx_config_file_param(parameters_client);
     check_for_device_serial_param(parameters_client);
+    check_for_device_usb_path_param(parameters_client);
     check_for_frame_id_param(parameters_client);
 
     // Initialize ParameterManager EARLY for parameter validation
@@ -314,12 +315,12 @@ public:
     // Device family-aware USB connection creation
     auto device_info = ublox_dgnss::get_device_family_info(device_family_);
     RCLCPP_DEBUG(
-      get_logger(), "Make USB Connection - Device: %s, Product IDs: %zu, Serial: '%s'",
+      get_logger(), "Make USB Connection - Device: %s, Product IDs: %zu, Serial: '%s', USB path: '%s'",
       device_info.description.c_str(), device_info.product_ids.size(),
-      serial_str_.c_str());
+      serial_str_.c_str(), usb_path_.c_str());
     usbc_ = std::make_shared<usb::Connection>(
       U_BLOX_AG_VENDOR_ID, device_info.product_ids,
-      serial_str_, device_family_);
+      serial_str_, device_family_, LIBUSB_OPTION_LOG_LEVEL, usb_path_);
 
     RCLCPP_DEBUG(get_logger(), "setting up usb callbacks ...");
     usbc_->set_in_callback(connection_in_callback);
@@ -616,6 +617,13 @@ private:
   std::string serial_str_;
   const std::string DEV_STRING_PARAM_NAME = "DEVICE_SERIAL_STRING";
 
+  // Physical USB topology path (e.g. "1-2", matching lsusb/sysfs notation).
+  // Takes priority over DEVICE_SERIAL_STRING when set -- needed to tell two
+  // identical-VID:PID F9P units apart, since the ZED-F9P doesn't actually
+  // support customising its USB iSerialNumber (see usb.hpp's usb_path_).
+  std::string usb_path_;
+  const std::string DEV_USB_PATH_PARAM_NAME = "DEVICE_USB_PATH";
+
   ublox_dgnss::DeviceFamily device_family_;
   std::string device_family_str_;
   const std::string DEVICE_FAMILY_PARAM_NAME = "DEVICE_FAMILY";
@@ -729,6 +737,25 @@ private:
         this->get_logger(), "Parameter %s found with value: %s",
         DEV_STRING_PARAM_NAME.c_str(), serial_str_.c_str());
     }
+  }
+
+  UBLOX_DGNSS_NODE_LOCAL
+  void check_for_device_usb_path_param(rclcpp::SyncParametersClient::SharedPtr param_client)
+  {
+    // default to empty string
+    usb_path_ = "";
+
+    if (!param_client->has_parameter(DEV_USB_PATH_PARAM_NAME)) {
+      RCLCPP_INFO(
+        this->get_logger(), "Parameter %s not found, not filtering by USB path.",
+        DEV_USB_PATH_PARAM_NAME.c_str());
+      return;
+    }
+
+    usb_path_ = param_client->get_parameter<std::string>(DEV_USB_PATH_PARAM_NAME);
+    RCLCPP_INFO(
+      this->get_logger(), "Parameter %s found with value: %s",
+      DEV_USB_PATH_PARAM_NAME.c_str(), usb_path_.c_str());
   }
 
   UBLOX_DGNSS_NODE_LOCAL

@@ -29,12 +29,13 @@ namespace usb
 {
 Connection::Connection(
   int vendor_id, const std::vector<uint16_t> & product_ids, std::string serial_str,
-  ublox_dgnss::DeviceFamily device_family, int log_level)
+  ublox_dgnss::DeviceFamily device_family, int log_level, std::string usb_path)
 {
   vendor_id_ = vendor_id;
   product_ids_ = product_ids;
   connected_product_id_ = 0;  // Initialize to 0, will be set when device connects
   serial_str_ = serial_str;
+  usb_path_ = usb_path;
   device_family_ = device_family;
   class_id_ = LIBUSB_HOTPLUG_MATCH_ANY;
 
@@ -128,10 +129,28 @@ void Connection::init()
     #endif
 }
 
+std::string Connection::usb_device_path(libusb_device * device)
+{
+  // Builds the same "bus-port[.port...]" string Linux sysfs/lsusb use,
+  // e.g. "1-4.2" for bus 1, port 4, sub-port 2.
+  uint8_t ports[8];
+  int n = libusb_get_port_numbers(device, ports, sizeof(ports));
+  if (n < 0) {
+    return "";
+  }
+  std::ostringstream oss;
+  oss << static_cast<int>(libusb_get_bus_number(device));
+  for (int i = 0; i < n; i++) {
+    oss << (i == 0 ? "-" : ".") << static_cast<int>(ports[i]);
+  }
+  return oss.str();
+}
+
 libusb_device_handle * Connection::open_device_with_serial_string(
   libusb_context * ctx,
   int vendor_id, const std::vector<uint16_t> & product_ids,
   std::string serial_str,
+  std::string usb_path,
   char * serial_num_string)
 {
   libusb_device_handle * devHandle = nullptr;
@@ -172,6 +191,14 @@ libusb_device_handle * Connection::open_device_with_serial_string(
     }
 
     if (!product_id_match) {
+      continue;
+    }
+
+    // If a USB topology path was specified, it fully determines device
+    // selection (checked before opening -- doesn't need a handle at all).
+    // Takes priority over serial_str because the ZED-F9P's iSerialNumber
+    // cannot be reliably customised (see usb_path_ comment in usb.hpp).
+    if (!usb_path.empty() && usb_device_path(device) != usb_path) {
       continue;
     }
 
@@ -217,6 +244,12 @@ libusb_device_handle * Connection::open_device_with_serial_string(
       }
     }
 
+    // usb_path (if given) already uniquely identified this device above --
+    // the serial_str matching below is irrelevant in that case.
+    if (!usb_path.empty()) {
+      break;
+    }
+
     // if specified serial string is empty, we can just return now but assign
     if (serial_str.empty()) {
       break;
@@ -244,10 +277,12 @@ bool Connection::open_device()
 
   char serial_num_string[SERIAL_STRING_BUFFER_SIZE];
   devh_ = open_device_with_serial_string(
-    ctx_, vendor_id_, product_ids_, serial_str_,
+    ctx_, vendor_id_, product_ids_, serial_str_, usb_path_,
     serial_num_string);
   if (!devh_) {
-    if (serial_str_.empty()) {
+    if (!usb_path_.empty()) {
+      throw std::string("Error finding USB device at path \"") + usb_path_ + "\"";
+    } else if (serial_str_.empty()) {
       throw std::string("Error finding USB device");
       // std::cerr << "Error finding ublox USB device (no serial string supplied)";
     } else {
